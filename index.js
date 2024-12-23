@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const cookieParser = require("cookie-parser")
 const jwt = require("jsonwebtoken")
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require('dotenv').config(); 
@@ -7,9 +8,39 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 // middleware
-app.use(cors());
+app.use(cors({
+    origin: ['http://localhost:5173','http://localhost:5000'],
+    credentials:true
+}));
 app.use(express.json());
+app.use(cookieParser());
 
+// customize middleware 
+const urlUsingCstmMiddleWare=async(req,res,next)=>{
+    console.log('url from customize middleware', req.protocol, req.host, req.originalUrl);
+    next();
+}
+
+// verify token through middleware 
+const verifyToken = async(req,res,next) =>{
+    const token = req.cookies?.token;
+    console.log("token from verifyToken middleware :" , token);
+    if(!token){
+        return res.status(401).send({ Message : "unauthorized"})
+    }
+    jwt.verify(token, process.env.ACCESS_TOKEN_SECRET ,(err,decoded)=>{
+        // if error 
+        if(err){
+            console.log(err);
+            return res.status(401).send({ Message : "Not Valid" })
+        }
+
+        // if successfully decoded
+        console.log(decoded);
+        req.user = decoded;
+        next();
+    })
+}
 
     
     const uri =
@@ -35,9 +66,17 @@ app.use(express.json());
         // access token api's
         app.post('/jwt', async(req,res)=>{
             const accessTokenUser = req.body;
-            console.log(accessTokenUser);
-            const accessToken = jwt.sign(accessTokenUser, 'secret' , {expiresIn : '1h'})
-            res.send(accessToken)
+            // console.log(accessTokenUser);
+            const accessToken = jwt.sign(accessTokenUser, process.env.ACCESS_TOKEN_SECRET , {expiresIn : '10h'})
+            res.cookie('token', accessToken , {
+                httpOnly: true,
+                secure: false,
+                sameSite: 'none'
+                // httpOnly: true,
+                // secure: process.env.NODE_ENV === "production",
+                // sameSite: process.env.NODE_ENV === "production" ? "none" : "strict"
+            })
+            res.send('token received',)
         })
 
         // data api's
@@ -45,7 +84,7 @@ app.use(express.json());
             const result = await services.find().toArray();
             res.send(result)
         })
-
+    
         // finding just one 
         app.get('/services/:id', async(req,res)=>{
             const id = req.params.id;
@@ -53,6 +92,7 @@ app.use(express.json());
             const options = {
                 projection: { title: 1, price: 1 , img: 1 }
             }
+            
             const result = await services.findOne(query,options)
             res.send(result)
         })
@@ -67,12 +107,25 @@ app.use(express.json());
             res.send(result)
         })
 
-        app.get('/userOrders', async(req,res)=>{
+        app.get('/userOrders',urlUsingCstmMiddleWare, verifyToken, async(req,res)=>{
             // console.log(req.query.email);
+            // checking if the user trying to get only his data or not 
+            if(req.query.email !== req.user.email){
+                return res.status(403).send({Message : "Not Authorized to access the data"})
+            }
+
             let query = {};
             if(req.query?.email){
                 query = {email : req.query.email}
             }
+            const token = req.cookies.token;
+            console.log('from verifyToken middleware' , req.user);
+            if (token) {
+                console.log('Token from cookies:', token);
+            } else {
+                console.log('No token found in cookies');
+            }
+            
             const result = await userOrderCollection.find(query).toArray();
             res.send(result)
         })
